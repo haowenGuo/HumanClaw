@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenClaw Runtime</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+        }
+
+        :root {
+            color-scheme: dark;
+            --bg: #091118;
+            --panel: rgba(17, 27, 37, 0.96);
+            --panel-2: rgba(22, 35, 47, 0.96);
+            --line: rgba(255, 255, 255, 0.08);
+            --line-strong: rgba(255, 255, 255, 0.14);
+            --text: #f3f7fb;
+            --muted: #8ea6b8;
+            --good: #59c6a8;
+            --warn: #efab64;
+            --bad: #dc706b;
+            --accent: #69d0c1;
+            --accent-2: #7fb8ff;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            background:
+                radial-gradient(circle at top left, rgba(105, 208, 193, 0.12), transparent 32%),
+                radial-gradient(circle at top right, rgba(127, 184, 255, 0.12), transparent 30%),
+                var(--bg);
+            color: var(--text);
+        }
+
+        body {
+            overflow: auto;
+        }
+
+        #app {
+            width: 100%;
+            min-height: 100%;
+            height: auto;
+            padding: 22px;
+            display: grid;
+            grid-template-rows: auto auto;
+            gap: 16px;
+        }
+
+        #header {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: linear-gradient(135deg, rgba(18, 29, 39, 0.98), rgba(13, 21, 29, 0.98));
+            padding: 22px 24px;
+            display: flex;
+            justify-content: space-between;
+            gap: 18px;
+            align-items: flex-start;
+        }
+
+        #kicker {
+            color: var(--accent);
+            font-size: 12px;
+            letter-spacing: 0;
+        }
+
+        #title {
+            margin-top: 10px;
+            font-size: 34px;
+            line-height: 1.14;
+            max-width: 18ch;
+        }
+
+        #hero-summary {
+            margin-top: 14px;
+            max-width: 70ch;
+            color: var(--muted);
+            font-size: 15px;
+            line-height: 1.7;
+        }
+
+        #hero-meta {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .chip {
+            min-height: 38px;
+            padding: 0 14px;
+            border-radius: 8px;
+            border: 1px solid var(--line);
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(255, 255, 255, 0.03);
+            font-size: 13px;
+            color: var(--text);
+        }
+
+        .chip::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: var(--muted);
+        }
+
+        .chip.good::before {
+            background: var(--good);
+        }
+
+        .chip.warn::before {
+            background: var(--warn);
+        }
+
+        .chip.bad::before {
+            background: var(--bad);
+        }
+
+        #grid {
+            min-height: 0;
+            display: grid;
+            grid-template-columns: 1.02fr 0.98fr;
+            grid-template-rows: auto auto;
+            gap: 16px;
+            align-items: start;
+        }
+
+        .panel {
+            min-height: 0;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            overflow: auto;
+        }
+
+        .panel.full {
+            grid-column: 1 / -1;
+            background: var(--panel-2);
+        }
+
+        .panel-head {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .panel-head-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        #activity-title {
+            font-size: 24px;
+            line-height: 1.2;
+        }
+
+        #activity-detail {
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.7;
+            min-height: 46px;
+        }
+
+        #progress-track {
+            width: 100%;
+            height: 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            overflow: hidden;
+        }
+
+        #progress-fill {
+            width: 0;
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, var(--accent), var(--accent-2));
+            transition: width 180ms ease;
+        }
+
+        #step-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .step-row {
+            display: grid;
+            grid-template-columns: 18px 1fr auto;
+            gap: 10px;
+            align-items: center;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .step-row.active {
+            border-color: rgba(105, 208, 193, 0.32);
+            background: rgba(105, 208, 193, 0.08);
+        }
+
+        .step-row.done {
+            border-color: rgba(89, 198, 168, 0.22);
+        }
+
+        .step-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 999px;
+            border: 2px solid rgba(255, 255, 255, 0.16);
+            background: transparent;
+        }
+
+        .step-row.done .step-dot {
+            border-color: var(--good);
+            background: var(--good);
+        }
+
+        .step-row.active .step-dot {
+            border-color: var(--accent);
+            background: var(--accent);
+        }
+
+        .step-label {
+            font-size: 14px;
+        }
+
+        .step-state {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .button-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        button,
+        select,
+        input {
+            border-radius: 8px;
+            border: 1px solid var(--line);
+            font-size: 14px;
+        }
+
+        button {
+            min-height: 42px;
+            padding: 0 15px;
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text);
+        }
+
+        button.primary {
+            background: linear-gradient(135deg, var(--accent) 0%, #81ddcf 100%);
+            border-color: transparent;
+            color: #08211d;
+            font-weight: 700;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.56;
+        }
+
+        .ghost-btn {
+            min-height: 34px;
+            padding: 0 12px;
+            font-size: 13px;
+        }
+
+        #setup-summary {
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.7;
+            min-height: 48px;
+        }
+
+        #setup-form {
+            display: grid;
+            gap: 14px;
+        }
+
+        .field {
+            display: grid;
+            gap: 8px;
+        }
+
+        .field > span {
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        select,
+        input {
+            min-height: 44px;
+            width: 100%;
+            padding: 0 13px;
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text);
+            outline: none;
+        }
+
+        input::placeholder {
+            color: rgba(142, 166, 184, 0.75);
+        }
+
+        .field-tip,
+        #form-note {
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.6;
+        }
+
+        #config-state {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        #info-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .info-block {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 12px 13px;
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .info-label {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .info-value {
+            margin-top: 7px;
+            font-size: 13px;
+            line-height: 1.6;
+            word-break: break-all;
+        }
+
+        @media (max-width: 1100px) {
+            body {
+                overflow: auto;
+            }
+
+            #app {
+                height: auto;
+                min-height: 100%;
+                padding: 14px;
+            }
+
+            #header,
+            .panel-head-row {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            #hero-meta {
+                justify-content: flex-start;
+            }
+
+            #grid {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto;
+            }
+
+            .panel.full {
+                grid-column: auto;
+            }
+
+            #info-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <header id="header">
+            <div>
+                <div id="kicker">OpenClaw Runtime Installer</div>
+                <div id="title">先把 Runtime 点亮，再把模型 Provider 配好。</div>
+                <div id="hero-summary">这个首启页会完成本地 Runtime 准备、Gateway 拉起、健康检查和 Provider 首配。装完以后，别的前端直接连 `ws://127.0.0.1:19011` 就能用。</div>
+            </div>
+
+            <div id="hero-meta">
+                <div class="chip" id="status-chip">读取中</div>
+                <div class="chip" id="provider-chip">Provider 未配置</div>
+            </div>
+        </header>
+
+        <main id="grid">
+            <section class="panel" id="progress-panel">
+                <div class="panel-head">首启流程</div>
+                <div id="activity-title">读取本机状态...</div>
+                <div id="activity-detail">正在检查安装包、Runtime 和 Gateway。</div>
+                <div id="progress-track">
+                    <div id="progress-fill"></div>
+                </div>
+                <div id="step-list"></div>
+                <div class="button-row">
+                    <button id="start-btn" class="primary" type="button">启动 Runtime</button>
+                    <button id="restart-btn" type="button">重启 Gateway</button>
+                    <button id="stop-btn" type="button">停止 Gateway</button>
+                    <button id="open-home-btn" type="button">打开 Home</button>
+                    <button id="open-logs-btn" type="button">打开日志目录</button>
+                </div>
+            </section>
+
+            <section class="panel" id="setup-panel">
+                <div class="panel-head-row">
+                    <div class="panel-head">Provider 向导</div>
+                    <button id="use-current-btn" class="ghost-btn" type="button">带入当前配置</button>
+                </div>
+                <div id="setup-summary">优先把 Runtime 拉起来，然后在这里写入模型 Provider 和默认模型。</div>
+
+                <form id="setup-form">
+                    <label class="field">
+                        <span>Provider</span>
+                        <select id="provider-select"></select>
+                    </label>
+
+                    <label class="field" id="base-url-field" hidden>
+                        <span>Base URL</span>
+                        <input id="base-url-input" type="text" placeholder="https://api.example.com/v1">
+                        <div class="field-tip">只填兼容 OpenAI `/v1` 的地址。</div>
+                    </label>
+
+                    <label class="field" id="custom-provider-field" hidden>
+                        <span>Provider ID</span>
+                        <input id="custom-provider-input" type="text" placeholder="mygateway">
+                        <div class="field-tip">会生成默认模型名 `providerId/modelId`。</div>
+                    </label>
+
+                    <label class="field">
+                        <span id="model-label">默认模型</span>
+                        <input id="model-input" type="text" list="model-suggestions" placeholder="openrouter/auto">
+                        <datalist id="model-suggestions"></datalist>
+                    </label>
+
+                    <label class="field">
+                        <span>API Key</span>
+                        <input id="api-key-input" type="password" placeholder="留空则保留现有 Key">
+                        <div class="field-tip" id="api-key-hint">留空会继续使用已有配置。</div>
+                    </label>
+
+                    <div id="form-note">默认会把 Provider key 写进 `openclaw.json`，这样 Runtime 自己就能启动和恢复，不用你再单独配环境变量。</div>
+
+                    <div class="button-row">
+                        <button id="save-provider-btn" class="primary" type="submit">保存并应用</button>
+                        <button id="refresh-status-btn" type="button">刷新状态</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="panel full" id="details-panel">
+                <div class="panel-head-row">
+                    <div class="panel-head">当前状态</div>
+                    <div id="config-state">尚未读取配置</div>
+                </div>
+                <div id="info-grid"></div>
+            </section>
+        </main>
+    </div>
+
+    <script src="./renderer.js"></script>
+</body>
+</html>

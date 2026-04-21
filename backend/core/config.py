@@ -5,9 +5,9 @@ from typing import Optional
 from pydantic_settings import BaseSettings
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BACKEND_DIR / "data"
-DEFAULT_DATABASE_URL = f"sqlite+aiosqlite:///{(DATA_DIR / 'app.db').as_posix()}"
-DEFAULT_CHROMA_PERSIST_DIR = (DATA_DIR / "chroma").as_posix()
+BACKEND_DATA_DIR = BACKEND_DIR / "data"
+DEFAULT_DATABASE_URL = f"sqlite+aiosqlite:///{(BACKEND_DATA_DIR / 'app.db').as_posix()}"
+DEFAULT_CHROMA_PERSIST_DIR = (BACKEND_DATA_DIR / "chroma").as_posix()
 
 
 class Settings(BaseSettings):
@@ -16,10 +16,10 @@ class Settings(BaseSettings):
     # 服务配置
     APP_NAME: str = "AIGril Backend"
     DEBUG: bool = True
-    CORS_ALLOW_ORIGINS: str = "http://localhost:5173,https://haowenguo.github.io"
+    CORS_ALLOW_ORIGINS: str = "http://localhost:5173,https://haowenguo.github.io,null"
 
     # 数据库配置 (默认SQLite，生产环境建议换 PostgreSQL)
-    DATA_DIR: str = str(DATA_DIR)
+    DATA_DIR: str = str(BACKEND_DATA_DIR)
     DATABASE_URL: str = DEFAULT_DATABASE_URL
     CHROMA_PERSIST_DIR: str = DEFAULT_CHROMA_PERSIST_DIR
 

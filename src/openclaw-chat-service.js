@@ -5,6 +5,10 @@ function normalizeText(value) {
     return value.replace(/[ \t]+/g, ' ').trim();
 }
 
+function sleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function extractMessageText(message) {
     if (!message) {
         return '';
@@ -33,6 +37,24 @@ function toAssistantPayload(text) {
         display_text: normalized,
         speech_text: normalized.replace(/\n/g, ' ')
     };
+}
+
+function formatGatewayStatus(status) {
+    if (!status || typeof status !== 'object') {
+        return '';
+    }
+
+    const detail = [
+        normalizeText(status.gatewayUrl) && `当前地址：${status.gatewayUrl}`,
+        Array.isArray(status.gatewayCandidates) && status.gatewayCandidates.length > 0
+            ? `候选地址：${status.gatewayCandidates.join(', ')}`
+            : '',
+        normalizeText(status.lastError) && `状态：${status.lastError}`
+    ]
+        .filter(Boolean)
+        .join('；');
+
+    return detail ? `（${detail}）` : '';
 }
 
 function mapHistoryMessage(message, index) {
@@ -91,7 +113,7 @@ export class OpenClawDesktopChatService {
         }
 
         this.sessionKey = status.sessionKey || this.sessionKey;
-        const history = await this.assistant.getHistory(200);
+        const history = await this.loadInitialHistoryWithRetry();
         this.sessionKey = history?.sessionKey || this.sessionKey;
         this.historyCache = Array.isArray(history?.messages)
             ? history.messages
@@ -99,6 +121,28 @@ export class OpenClawDesktopChatService {
                 .filter(Boolean)
             : [];
         this.initialized = true;
+    }
+
+    async loadInitialHistoryWithRetry() {
+        let lastError = null;
+
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+                return await this.assistant.getHistory(200);
+            } catch (error) {
+                lastError = error instanceof Error ? error : new Error(String(error));
+                if (attempt < 2) {
+                    await sleep(500 * (attempt + 1));
+                }
+            }
+        }
+
+        let statusSuffix = '';
+        try {
+            statusSuffix = formatGatewayStatus(await this.assistant.getStatus());
+        } catch {}
+
+        throw new Error(`${lastError?.message || 'OpenClaw Gateway 连接失败'}${statusSuffix}`);
     }
 
     async bootstrapTranscript() {

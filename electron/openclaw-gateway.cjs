@@ -1,9 +1,13 @@
 const { EventEmitter } = require('events');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { pathToFileURL } = require('url');
+const {
+    resolveHumanClawFsLayout,
+    resolveOpenClawHomeHints,
+    resolveOpenClawRepoHints
+} = require('./fs-layout.cjs');
 
 const DEFAULT_GATEWAY_URL =
     process.env.AIGRIL_OPENCLAW_GATEWAY_URL ||
@@ -98,27 +102,27 @@ function resolveExistingPath(candidates) {
     return '';
 }
 
-function resolveOpenClawHome() {
-    const explicit =
-        normalizeOptionalString(process.env.AIGRIL_OPENCLAW_HOME) ||
-        normalizeOptionalString(process.env.OPENCLAW_HOME);
-    if (explicit) {
-        return explicit;
+function buildOpenClawHomeCandidates(hint) {
+    const home = normalizeOptionalString(typeof hint === 'string' ? hint : hint?.home);
+    if (!home) {
+        return [];
     }
 
-    const homeDir = os.homedir();
-    const candidates = [
-        path.join(homeDir, '.openclaw-source-dev'),
-        path.join(homeDir, '.openclaw')
-    ];
+    const nestedHome = home.toLowerCase().endsWith('\\.openclaw') ? '' : path.join(home, '.openclaw');
+    const orderedCandidates = hint?.preferNested ? [nestedHome, home] : [home, nestedHome];
+    return dedupeStrings(orderedCandidates);
+}
 
-    for (const candidate of candidates) {
-        if (
-            fileExists(path.join(candidate, 'openclaw.json')) ||
-            fileExists(path.join(candidate, 'identity', 'device.json')) ||
-            fileExists(path.join(candidate, 'devices', 'paired.json'))
-        ) {
-            return candidate;
+function resolveOpenClawHome() {
+    for (const hint of resolveOpenClawHomeHints()) {
+        for (const candidate of buildOpenClawHomeCandidates(hint)) {
+            if (
+                fileExists(path.join(candidate, 'openclaw.json')) ||
+                fileExists(path.join(candidate, 'identity', 'device.json')) ||
+                fileExists(path.join(candidate, 'devices', 'paired.json'))
+            ) {
+                return candidate;
+            }
         }
     }
 
@@ -126,15 +130,11 @@ function resolveOpenClawHome() {
 }
 
 function resolveGatewayRuntimeCandidates() {
-    const repoHints = dedupeStrings([
-        normalizeOptionalString(process.env.AIGRIL_OPENCLAW_REPO),
-        normalizeOptionalString(process.env.OPENCLAW_REPO),
-        path.resolve(__dirname, '..', '..', 'HumanClaw', 'OPENCLAW_Lobster'),
-        path.resolve(__dirname, '..', '..', 'OPENCLAW_Lobster'),
-        path.resolve(process.cwd(), '..', 'HumanClaw', 'OPENCLAW_Lobster'),
-        path.resolve(process.cwd(), '..', 'OPENCLAW_Lobster'),
-        'F:\\HumanClaw\\OPENCLAW_Lobster'
-    ]);
+    const layout = resolveHumanClawFsLayout();
+    const repoHints = dedupeStrings(resolveOpenClawRepoHints({
+        layout,
+        appPath: path.resolve(__dirname, '..')
+    }));
 
     return dedupeStrings([
         normalizeOptionalString(process.env.AIGRIL_OPENCLAW_SDK_PATH),
@@ -212,6 +212,7 @@ class OpenClawGatewayManager extends EventEmitter {
             connected: this.connected,
             connecting: Boolean(this.connectPromise),
             gatewayUrl: this.activeGatewayUrl,
+            gatewayCandidates: [...this.config.gatewayUrls],
             sessionKey: this.sessionKey,
             lastError: this.lastError,
             connectedAt: this.connectedAt,
@@ -256,6 +257,7 @@ class OpenClawGatewayManager extends EventEmitter {
         }
 
         let lastFailure = null;
+        const failures = [];
 
         for (const gatewayUrl of this.config.gatewayUrls) {
             try {
@@ -266,13 +268,17 @@ class OpenClawGatewayManager extends EventEmitter {
                 return;
             } catch (error) {
                 lastFailure = error instanceof Error ? error : new Error(String(error));
+                failures.push(`${gatewayUrl}: ${lastFailure.message}`);
                 this.lastError = lastFailure.message;
                 this.emitStatus();
                 await this.teardownClient();
             }
         }
 
-        throw lastFailure || new Error('OpenClaw Gateway 连接失败');
+        const attempts = failures.length > 0 ? failures.join(' | ') : this.config.gatewayUrls.join(', ');
+        throw new Error(
+            `OpenClaw Gateway 连接失败（已尝试：${attempts}${lastFailure?.message ? `；最后错误：${lastFailure.message}` : ''}）`
+        );
     }
 
     async connectSingle(GatewayClient, gatewayUrl) {

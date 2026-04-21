@@ -209,6 +209,34 @@
             cursor: not-allowed;
         }
 
+        #voice-btn {
+            min-width: 86px;
+            border: 1px solid rgba(115, 184, 229, 0.22);
+            border-radius: 8px;
+            background: rgba(115, 184, 229, 0.1);
+            color: var(--text-main);
+            padding: 10px 14px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            -webkit-app-region: no-drag;
+        }
+
+        #voice-btn:hover:enabled {
+            background: rgba(115, 184, 229, 0.18);
+        }
+
+        #voice-btn.is-active {
+            background: #d9534f;
+            border-color: #d9534f;
+            color: #ffffff;
+        }
+
+        #voice-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
         ::-webkit-scrollbar {
             width: 6px;
         }
@@ -235,7 +263,10 @@
             <textarea id="message-input" placeholder="说点什么，让 AIGL 陪你聊聊"></textarea>
             <div id="composer-footer">
                 <div id="chat-status">已连接桌宠</div>
-                <button id="send-btn" type="button">发送</button>
+                <div style="display:flex; gap:8px;">
+                    <button id="voice-btn" type="button">语音</button>
+                    <button id="send-btn" type="button">发送</button>
+                </div>
             </div>
         </div>
     </div>

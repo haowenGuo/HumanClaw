@@ -1,6 +1,7 @@
 <div align="center">
   <h1>HumanClaw</h1>
-  <p><strong>一个从 AIGril 桌宠运行时中独立出来的 3D VRM 桌面助手前端项目，目标是接入 OpenClaw，演进成真正可工作的助手型桌宠。</strong></p>
+  <p><strong>桌宠前端 + OpenClaw 助手桥接层。</strong></p>
+  <p>HumanClaw 负责 3D 虚拟人、托盘、聊天窗和桌面交互；OpenClaw 负责会话、Agent、工具调用和长任务执行。前台是桌宠，后台是助手。</p>
   <p>
     <a href="README.md">English</a> ·
     <a href="README.zh-CN.md">简体中文</a> ·
@@ -10,53 +11,108 @@
 
 ---
 
-## 项目简介
+## 这个仓库现在包含什么
 
-HumanClaw 是从原来的 AIGril 项目里拆出来的桌面端分支。
+这个仓库现在同时承载两条产品线：
 
-这个仓库保留了 3D 虚拟人运行时、Electron 桌宠外壳、聊天窗口，以及对 OpenClaw Gateway 的桥接能力，后续会以独立产品的方式继续演进。
+1. **HumanClaw 桌面应用**
+   - 透明桌宠窗口
+   - 独立聊天窗口
+   - 控制面板和首启向导
+   - 支持陪伴后端或本地 OpenClaw
+   - 负责桌面语音交互体验
 
-当前可以理解成两种模式：
+2. **OpenClaw Runtime 安装器**
+   - 给 HumanClaw 配套的本地 OpenClaw Runtime 安装包 / 便携包
+   - 代码在 [`openclaw-installer/`](./openclaw-installer)
+   - 这里只做运行时打包与启动壳，**不包含**完整上游 OpenClaw 源码仓库
 
-- 陪伴模式：本地 3D VRM 桌宠，负责人物展示、聊天和动作表情联动
-- 助手模式：同一个桌宠前端接入 OpenClaw，由 OpenClaw 负责 session、Agent、工具调用和后台任务
+也就是说，这个仓库不是“把 OpenClaw 整个塞进来”，而是把 **HumanClaw 前端** 和 **OpenClaw 本地运行时的打包接入层** 放在一起维护。
 
-## 与 OpenClaw 的关系
+## 产品定位
 
-- HumanClaw 是 OpenClaw 的桌面前端，不是它的替代品。
-- HumanClaw 负责人物渲染、桌面交互、托盘形态和助手呈现。
-- OpenClaw 负责会话、事件流、工具执行和任务编排。
+```mermaid
+flowchart LR
+    subgraph HC["HumanClaw 桌面层"]
+        Pet["VRM 桌宠 / 人物渲染"]
+        Chat["聊天窗口"]
+        Panel["控制面板 / 首启向导"]
+        Voice["语音采集 / 语音播报胶水层"]
+    end
 
-## 当前能力范围
+    subgraph OC["OpenClaw"]
+        Gateway["Gateway 事件流"]
+        Session["Session 状态"]
+        Agent["Agent Runtime"]
+        Tools["工具执行 / 任务编排"]
+    end
+
+    Backend["陪伴后端（可选）"]
+
+    Pet --> Chat
+    Chat --> Voice
+    Chat --> Gateway
+    Panel --> Gateway
+    Gateway --> Session
+    Session --> Agent
+    Agent --> Tools
+    Chat --> Backend
+```
+
+## 运行模式
+
+HumanClaw 现在支持两种后端模式：
+
+- **`companion-service`**
+  - 走陪伴后端
+  - 更偏聊天、陪伴、轻交互
+
+- **`openclaw-local`**
+  - 连接本地 OpenClaw Gateway
+  - 由 OpenClaw 负责 session、事件流、工具调用和任务执行
+
+边界要点：
+
+- HumanClaw 是桌面壳
+- OpenClaw 是助手运行时
+- HumanClaw 不是 OpenClaw Gateway / Agent 系统的替代品
+
+## 当前能力
 
 - 无边框透明桌宠窗口
 - 与桌宠同步的独立聊天窗口
 - 基于 Three.js 和 `@pixiv/three-vrm` 的 VRM 虚拟人渲染
-- 可选接入 OpenClaw Gateway 的 Electron 主进程桥接
-- 仍保留本地 FastAPI 后端，方便继续做陪伴模式和独立联调
+- 控制面板：后端模式、镜头参数、语音开关、Gateway 地址
+- 首启向导
+- 本地语音链路：
+  浏览器录音 -> Electron IPC -> Python ASR Worker
+- 可选接入本地 OpenClaw Gateway
+- Windows 安装包：桌宠应用 + OpenClaw Runtime 安装器
 
-## 本地启动
+## 快速开始
 
-### 网页版
+### 1. 安装依赖
 
 ```bash
 pnpm install
-pnpm dev
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-copy backend\.env.example backend\.env
-python -m uvicorn backend.main:app --reload
 ```
 
-### 桌宠版
+### 2. 启动桌面开发模式
 
 ```bash
-pnpm install
+pnpm desktop:dev
+```
+
+### 3. 本地直接运行桌宠
+
+```bash
 pnpm desktop:start
 ```
 
-### 桌宠版 + OpenClaw
+### 4. 接本机 OpenClaw
 
 ```bash
 openclaw gateway --profile source-dev
@@ -64,53 +120,85 @@ set AIGRIL_OPENCLAW_GATEWAY_URL=ws://127.0.0.1:19011
 pnpm exec electron .
 ```
 
-### 桌宠开发模式
-
-```bash
-pnpm desktop:dev
-```
-
-至少需要配置：
-
-```env
-LLM_API_KEY=your_llm_api_key
-```
-
-可选助手桥接环境变量：
-
-```env
-AIGRIL_OPENCLAW_GATEWAY_URL=ws://127.0.0.1:19011
-AIGRIL_OPENCLAW_HOME=C:\Users\<you>\.openclaw-source-dev
-AIGRIL_OPENCLAW_REPO=F:\HumanClaw\OPENCLAW_Lobster
-```
-
-兼容性说明：仓库拆分阶段，现有 `AIGRIL_*` 环境变量和 `aigril:*` IPC 通道暂时保留，避免把现有桥接链路一起改坏。
-
-## 打包
-
-生成最新版 Windows 桌宠安装包与便携版：
+### 5. 打桌宠安装包
 
 ```bash
 pnpm desktop:package
 ```
 
-产物会输出到 `release/` 目录，包括：
+### 6. 打 OpenClaw Runtime 安装包
 
-- `HumanClaw-Setup-<version>-win-x64.exe`
-- `HumanClaw-Portable-<version>-win-x64.exe`
-- `release/win-unpacked/HumanClaw.exe`
-
-## 项目结构
-
-```text
-backend/   FastAPI 接口、记忆逻辑、部署配置
-electron/  Electron 主进程、预加载桥接、桌宠状态管理
-src/       VRM 数字人、聊天运行时、桌面端渲染入口
-Resources/ VRM 模型与 VRMA 动作资源
-scripts/   静态构建辅助脚本
-examples/  独立开发示例
+```bash
+pnpm openclaw:prepare-runtime
+pnpm openclaw:package-installer
 ```
 
-## 后续产品方向
+生成产物包括：
 
-HumanClaw 的目标是成为 OpenClaw 之上的桌面助手层：前台保留虚拟人、桌宠和陪伴体验，后台把工具调用、长任务执行和工程工作流交给 OpenClaw。
+- `HumanClaw-<Edition>-Setup-<version>-win-x64.exe`
+- `release/win-unpacked/HumanClaw.exe`
+- `OpenClaw-Runtime-Setup-<version>-win-x64.exe`
+- `OpenClaw-Runtime-Portable-<version>-win-x64.exe`
+
+## 环境变量
+
+陪伴后端至少需要：
+
+```env
+LLM_API_KEY=your_llm_api_key
+```
+
+可选桥接变量：
+
+```env
+AIGRIL_OPENCLAW_GATEWAY_URL=ws://127.0.0.1:19011
+AIGRIL_OPENCLAW_HOME=F:\HumanClaw\Runtime\OpenClawHome
+AIGRIL_OPENCLAW_REPO=F:\path\to\your\openclaw-source
+```
+
+兼容性说明：因为仓库是从 AIGril 拆出来的，所以现在仍保留 `AIGRIL_*` 环境变量和 `aigril:*` IPC 通道，目的是先保证链路稳定，再逐步清理命名。
+
+## 目录与运行时布局
+
+应用会根据所选安装盘 / 工作盘自动解析安装与运行时目录。  
+在当前仓库和示例环境里，常见路径通常会落到：
+
+```text
+F:\HumanClaw\Applications\...
+F:\HumanClaw\Runtime\...
+F:\HumanClaw\VM\...
+```
+
+但逻辑上并不是死锁在 F 盘，具体实现见 [`electron/fs-layout.cjs`](./electron/fs-layout.cjs)。
+
+## 仓库结构
+
+```text
+backend/             FastAPI 陪伴后端与 TTS 接口
+electron/            Electron 主进程、预加载桥、桌宠状态、OpenClaw 桥接
+openclaw-installer/  OpenClaw Runtime 安装器外壳
+src/                 虚拟人运行时、聊天运行时、控制面板与首启向导前端
+Resources/           VRM 模型与 VRMA 动作资源
+scripts/             打包与静态构建辅助脚本
+examples/            小型开发示例
+```
+
+## OpenClaw 这部分到底是什么
+
+这个仓库里和 OpenClaw 相关的部分，定位是：
+
+- 本地 Gateway 对接
+- Runtime 打包
+- 启动与安装器外壳
+
+而不是完整的上游 OpenClaw 源码仓库。
+
+更具体的说明见 [`openclaw-installer/README.md`](./openclaw-installer/README.md)。
+
+## 当前方向
+
+当前的整理方向很明确：
+
+- **HumanClaw** 专注桌宠、人物、语音和桌面交互
+- **OpenClaw** 专注会话、工具和工程任务执行
+- 两者之间通过清晰的桥接层连接，而不是重新耦死成一个大杂烩

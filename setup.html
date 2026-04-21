@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HumanClaw Setup</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+        }
+
+        :root {
+            color-scheme: dark;
+            --bg: #10161d;
+            --surface: rgba(22, 31, 40, 0.96);
+            --surface-2: rgba(255, 255, 255, 0.04);
+            --border: rgba(255, 255, 255, 0.08);
+            --text: #f6f8fb;
+            --muted: #9fb0bf;
+            --teal: #54c2b0;
+            --orange: #f49a63;
+            --red: #dd6666;
+            --gold: #d7bb63;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background:
+                linear-gradient(140deg, rgba(84, 194, 176, 0.16) 0%, transparent 28%),
+                linear-gradient(240deg, rgba(244, 154, 99, 0.14) 0%, transparent 32%),
+                linear-gradient(0deg, rgba(215, 187, 99, 0.08) 0%, transparent 36%),
+                var(--bg);
+            color: var(--text);
+        }
+
+        body {
+            display: flex;
+            align-items: stretch;
+        }
+
+        #shell {
+            width: 100%;
+            height: 100%;
+            display: grid;
+            grid-template-columns: 1.1fr 0.8fr;
+            overflow: hidden;
+        }
+
+        #main-pane {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+            border-right: 1px solid var(--border);
+        }
+
+        #hero {
+            padding: 24px 28px 18px;
+            border-bottom: 1px solid var(--border);
+            -webkit-app-region: drag;
+        }
+
+        #hero-kicker {
+            color: var(--teal);
+            font-size: 12px;
+            margin-bottom: 8px;
+        }
+
+        #hero-title {
+            font-size: 30px;
+            font-weight: 700;
+            line-height: 1.18;
+            max-width: 14ch;
+        }
+
+        #hero-copy {
+            margin-top: 10px;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.7;
+            max-width: 56ch;
+        }
+
+        #progress-row {
+            margin-top: 18px;
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+            -webkit-app-region: no-drag;
+        }
+
+        .progress-step {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.04);
+            padding: 12px;
+        }
+
+        .progress-step.is-active {
+            border-color: rgba(84, 194, 176, 0.7);
+            background: rgba(84, 194, 176, 0.12);
+        }
+
+        .progress-index {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .progress-name {
+            margin-top: 8px;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        .progress-copy {
+            margin-top: 6px;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.6;
+        }
+
+        #step-scroll {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px 28px 28px;
+        }
+
+        .step-panel {
+            display: none;
+        }
+
+        .step-panel.is-active {
+            display: block;
+        }
+
+        .step-heading {
+            margin-bottom: 18px;
+        }
+
+        .step-title {
+            font-size: 22px;
+            font-weight: 700;
+        }
+
+        .step-copy {
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.7;
+            max-width: 56ch;
+        }
+
+        .edition-grid,
+        .field-grid,
+        .toggle-grid,
+        .permission-grid {
+            display: grid;
+            gap: 14px;
+        }
+
+        .edition-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .field-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .toggle-grid,
+        .permission-grid {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .edition-card,
+        .toggle-card,
+        .permission-card {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.04);
+            padding: 16px;
+        }
+
+        .edition-card {
+            min-height: 184px;
+            cursor: pointer;
+            transition: border-color 0.18s ease, transform 0.18s ease, background 0.18s ease;
+        }
+
+        .edition-card:hover,
+        .edition-card.is-selected {
+            border-color: var(--card-accent, var(--teal));
+            background: rgba(255, 255, 255, 0.08);
+            transform: translateY(-1px);
+        }
+
+        .edition-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .edition-name {
+            font-size: 17px;
+            font-weight: 700;
+        }
+
+        .edition-badge {
+            padding: 5px 9px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .edition-copy {
+            margin-top: 12px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        .field-label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .field-input,
+        .field-select,
+        .field-range {
+            width: 100%;
+        }
+
+        .field-input,
+        .field-select {
+            min-height: 44px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text);
+            padding: 0 12px;
+            outline: none;
+        }
+
+        .field-input:focus,
+        .field-select:focus {
+            border-color: rgba(84, 194, 176, 0.75);
+        }
+
+        .field-range {
+            accent-color: var(--teal);
+        }
+
+        .field-note {
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.6;
+        }
+
+        .helper-strip {
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 16px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border);
+        }
+
+        .helper-copy {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.06);
+            font-size: 13px;
+        }
+
+        .status-pill::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: var(--muted);
+        }
+
+        .status-pill.is-online::before {
+            background: var(--teal);
+        }
+
+        .status-pill.is-warning::before {
+            background: var(--orange);
+        }
+
+        .status-pill.is-offline::before {
+            background: var(--red);
+        }
+
+        .checkbox-row {
+            margin-top: 10px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .range-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .range-value {
+            min-width: 64px;
+            text-align: right;
+            font-size: 13px;
+        }
+
+        .switch-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .switch-label {
+            color: var(--text);
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .switch-copy {
+            margin-top: 6px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .switch {
+            position: relative;
+            width: 48px;
+            height: 28px;
+            flex: 0 0 auto;
+        }
+
+        .switch input {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .switch-track {
+            width: 100%;
+            height: 100%;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.14);
+            transition: background 0.18s ease;
+        }
+
+        .switch-track::after {
+            content: '';
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            width: 20px;
+            height: 20px;
+            border-radius: 999px;
+            background: #ffffff;
+            transition: transform 0.18s ease;
+        }
+
+        .switch input:checked + .switch-track {
+            background: rgba(84, 194, 176, 0.72);
+        }
+
+        .switch input:checked + .switch-track::after {
+            transform: translateX(20px);
+        }
+
+        #footer-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 18px 28px 22px;
+            border-top: 1px solid var(--border);
+            background: rgba(17, 24, 31, 0.58);
+        }
+
+        #footer-hint {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        #footer-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .ghost-btn,
+        .secondary-btn,
+        .primary-btn {
+            min-height: 42px;
+            border-radius: 8px;
+            padding: 0 16px;
+            border: 1px solid var(--border);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .ghost-btn {
+            background: transparent;
+            color: var(--muted);
+        }
+
+        .secondary-btn {
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text);
+        }
+
+        .primary-btn {
+            background: linear-gradient(135deg, var(--teal) 0%, #68cab9 100%);
+            border-color: transparent;
+            color: #0f1817;
+        }
+
+        #summary-pane {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+            background: rgba(13, 19, 25, 0.78);
+        }
+
+        #summary-header {
+            padding: 28px 24px 18px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        #summary-kicker {
+            color: var(--gold);
+            font-size: 12px;
+        }
+
+        #summary-title {
+            margin-top: 10px;
+            font-size: 24px;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        #summary-copy {
+            margin-top: 10px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        #summary-scroll {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .summary-block {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.04);
+            padding: 16px;
+        }
+
+        .summary-label {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .summary-value {
+            margin-top: 8px;
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .summary-text,
+        .summary-list li {
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        .summary-list {
+            list-style: none;
+        }
+
+        .summary-list li::before {
+            content: '· ';
+            color: var(--teal);
+        }
+
+        #setup-close-btn {
+            position: absolute;
+            top: 18px;
+            right: 18px;
+            width: 34px;
+            height: 34px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 1;
+            z-index: 10;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.18);
+            border-radius: 6px;
+        }
+
+        @media (max-width: 1120px) {
+            #shell {
+                grid-template-columns: 1fr;
+            }
+
+            #summary-pane {
+                display: none;
+            }
+
+            .edition-grid,
+            .field-grid,
+            .toggle-grid,
+            .permission-grid,
+            #progress-row {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <button id="setup-close-btn" type="button" aria-label="关闭安装向导">×</button>
+    <div id="shell">
+        <section id="main-pane">
+            <header id="hero">
+                <div id="hero-kicker">HumanClaw First Run</div>
+                <div id="hero-title">一次配置完成后，桌宠就能按你的节奏工作。</div>
+                <div id="hero-copy">这不是老式安装页，而是首启向导。对话后端、镜头、语音和本地 OpenClaw 连接边界都在这里一次收口，后面都能从控制面板继续调。</div>
+                <div id="progress-row">
+                    <div class="progress-step is-active" data-step-index="0">
+                        <div class="progress-index">Step 1</div>
+                        <div class="progress-name">选择后端</div>
+                        <div class="progress-copy">先决定走陪伴服务，还是走你自己安装的本地 OpenClaw。</div>
+                    </div>
+                    <div class="progress-step" data-step-index="1">
+                        <div class="progress-index">Step 2</div>
+                        <div class="progress-name">桌宠与语音</div>
+                        <div class="progress-copy">把缩放、镜头、语音和开机形态一次调顺。</div>
+                    </div>
+                    <div class="progress-step" data-step-index="2">
+                        <div class="progress-index">Step 3</div>
+                        <div class="progress-name">连接目标</div>
+                        <div class="progress-copy">把两个地址定稳，再检查当前机器有没有已经跑起来的 OpenClaw。</div>
+                    </div>
+                </div>
+            </header>
+
+            <div id="step-scroll">
+                <section class="step-panel is-active" data-step-index="0">
+                    <div class="step-heading">
+                        <div class="step-title">你希望这台 HumanClaw 主要接哪条后端？</div>
+                        <div class="step-copy">如果你更偏陪伴和聊天，就直接用陪伴后端；如果你已经自己装好了 OpenClaw，就切到本地 OpenClaw 模式。</div>
+                    </div>
+                    <div class="edition-grid" id="setup-edition-grid"></div>
+                </section>
+
+                <section class="step-panel" data-step-index="1">
+                    <div class="step-heading">
+                        <div class="step-title">先把桌宠观感和语音链路调舒服</div>
+                        <div class="step-copy">这些设置会立即影响人物大小、镜头远近和本地语音体验，后面也能在控制面板里继续调。</div>
+                    </div>
+                    <div class="field-grid">
+                        <label>
+                            <span class="field-label">桌宠缩放</span>
+                            <div class="range-row">
+                                <input id="setup-pet-scale-input" class="field-range" type="range" min="0.3" max="1.15" step="0.05">
+                                <span id="setup-pet-scale-value" class="range-value"></span>
+                            </div>
+                        </label>
+                        <label>
+                            <span class="field-label">镜头距离</span>
+                            <div class="range-row">
+                                <input id="setup-camera-distance-input" class="field-range" type="range" min="0.85" max="1.8" step="0.05">
+                                <span id="setup-camera-distance-value" class="range-value"></span>
+                            </div>
+                        </label>
+                        <label>
+                            <span class="field-label">视线中心高度</span>
+                            <div class="range-row">
+                                <input id="setup-camera-target-y-input" class="field-range" type="range" min="0.65" max="1.25" step="0.01">
+                                <span id="setup-camera-target-y-value" class="range-value"></span>
+                            </div>
+                        </label>
+                    </div>
+                    <div class="toggle-grid" style="margin-top: 14px;">
+                        <div class="toggle-card">
+                            <div class="switch-row">
+                                <div>
+                                    <div class="switch-label">开机自启</div>
+                                    <div class="switch-copy">更适合把 HumanClaw 当作长期常驻的桌面伙伴。</div>
+                                </div>
+                                <label class="switch">
+                                    <input id="setup-auto-launch-input" type="checkbox">
+                                    <span class="switch-track"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="toggle-card">
+                            <div class="switch-row">
+                                <div>
+                                    <div class="switch-label">显示在任务栏</div>
+                                    <div class="switch-copy">如果你更偏桌面陪伴，可以关闭任务栏占位，只保留托盘和人物本体。</div>
+                                </div>
+                                <label class="switch">
+                                    <input id="setup-pet-taskbar-input" type="checkbox">
+                                    <span class="switch-track"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="toggle-card">
+                            <div class="switch-row">
+                                <div>
+                                    <div class="switch-label">本地语音识别</div>
+                                    <div class="switch-copy">开启后聊天窗可直接录音转文字，再交给当前选择的对话后端。</div>
+                                </div>
+                                <label class="switch">
+                                    <input id="setup-voice-input-input" type="checkbox">
+                                    <span class="switch-track"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="toggle-card">
+                            <div class="switch-row">
+                                <div>
+                                    <div class="switch-label">本地语音播报</div>
+                                    <div class="switch-copy">把助手结果做成简短播报回到人物身上，更像随身桌宠。</div>
+                                </div>
+                                <label class="switch">
+                                    <input id="setup-voice-output-input" type="checkbox">
+                                    <span class="switch-track"></span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="step-panel" data-step-index="2">
+                    <div class="step-heading">
+                        <div class="step-title">最后定一下连接目标和健康检查</div>
+                        <div class="step-copy">HumanClaw 不再管理 OpenClaw 的 provider、模型和权限。这里仅保存陪伴后端地址与本地 OpenClaw Gateway 地址，并检查当前能不能连通。</div>
+                    </div>
+                    <div class="helper-strip">
+                        <div>
+                            <div id="setup-assistant-status-pill" class="status-pill is-warning">等待健康检查</div>
+                            <div id="setup-assistant-status-detail" class="helper-copy" style="margin-top: 8px;">保存当前选择后，可直接检查本机 OpenClaw Gateway 是否已经打通。</div>
+                        </div>
+                        <button id="setup-health-check-btn" class="secondary-btn" type="button">立即检查</button>
+                    </div>
+                    <div class="field-grid">
+                        <label>
+                            <span class="field-label">后端 Base URL</span>
+                            <input id="setup-backend-base-url-input" class="field-input" type="text" placeholder="https://airi-backend.onrender.com">
+                            <div class="field-note">陪伴型聊天会直接走这里。</div>
+                        </label>
+                        <label>
+                            <span class="field-label">OpenClaw Gateway URL</span>
+                            <input id="setup-gateway-url-input" class="field-input" type="text" placeholder="ws://127.0.0.1:19011">
+                            <div class="field-note">只有你选择本地 OpenClaw 模式时才会尝试连接这里。</div>
+                        </label>
+                    </div>
+                    <div class="permission-grid" style="margin-top: 14px;">
+                        <div class="permission-card">
+                            <div class="switch-label">HumanClaw 负责</div>
+                            <div class="switch-copy">桌宠前端、聊天入口、语音识别与播报，以及对用户本地 OpenClaw Gateway 的桥接。</div>
+                        </div>
+                        <div class="permission-card">
+                            <div class="switch-label">OpenClaw 负责</div>
+                            <div class="switch-copy">provider、模型、权限策略、session 与工具调用。要用高能力，就去 OpenClaw 自己那边配置。</div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <footer id="footer-bar">
+                <div id="footer-hint">完成后会直接写入本机配置，并且以后都能从控制面板继续调整。</div>
+                <div id="footer-actions">
+                    <button id="setup-back-btn" class="ghost-btn" type="button">上一步</button>
+                    <button id="setup-next-btn" class="secondary-btn" type="button">下一步</button>
+                    <button id="setup-finish-btn" class="primary-btn" type="button" hidden>完成配置</button>
+                </div>
+            </footer>
+        </section>
+
+        <aside id="summary-pane">
+            <div id="summary-header">
+                <div id="summary-kicker">Summary</div>
+                <div id="summary-title">这次安装会变成什么样</div>
+                <div id="summary-copy">右侧这份摘要会随着你的选择实时更新，确保第一次配置不是盲选。</div>
+            </div>
+            <div id="summary-scroll">
+                <div class="summary-block">
+                    <div class="summary-label">对话后端</div>
+                    <div id="summary-edition" class="summary-value">陪伴后端</div>
+                    <div id="summary-edition-copy" class="summary-text">默认所有对话直接走陪伴服务。</div>
+                </div>
+                <div class="summary-block">
+                    <div class="summary-label">桌宠外观</div>
+                    <ul id="summary-avatar-list" class="summary-list"></ul>
+                </div>
+                <div class="summary-block">
+                    <div class="summary-label">运行边界</div>
+                    <ul id="summary-safety-list" class="summary-list"></ul>
+                </div>
+                <div class="summary-block">
+                    <div class="summary-label">对接方式</div>
+                    <div id="summary-provider" class="summary-text">陪伴后端 / https://airi-backend.onrender.com</div>
+                </div>
+                <div class="summary-block">
+                    <div class="summary-label">连接目标</div>
+                    <div id="summary-connectivity" class="summary-text">默认把对话发给陪伴后端；切到本地 OpenClaw 后才会尝试连接本机 Gateway。</div>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <script type="module" src="./src/setup-panel-app.js"></script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 <div align="center">
   <h1>HumanClaw</h1>
-  <p><strong>AIGril のデスクトップ系ランタイムから独立した、3D VRM デスクトップペット兼 OpenClaw フロントエンドです。</strong></p>
+  <p><strong>デスクトップペットの前面 UI + OpenClaw のアシスタント橋渡し層。</strong></p>
+  <p>HumanClaw は VRM アバター、トレイ、チャット、デスクトップ操作を担当し、OpenClaw はセッション、Agent 実行、ツール呼び出し、長時間タスクを担当します。</p>
   <p>
     <a href="README.md">English</a> ·
     <a href="README.zh-CN.md">简体中文</a> ·
@@ -10,31 +11,47 @@
 
 ---
 
-## 概要
+## このリポジトリに含まれるもの
 
-HumanClaw は、以前の AIGril プロジェクトから切り出したデスクトップ向けリポジトリです。
+このリポジトリには、現在 2 つの成果物があります。
 
-このリポジトリには、VRM アバター実行系、Electron デスクトップペット、チャットウィンドウ、そして OpenClaw Gateway へのブリッジがまとめられています。
+1. **HumanClaw デスクトップアプリ**
+   - 透明なデスクトップペット
+   - 独立したチャットウィンドウ
+   - コントロールパネルと初回セットアップ
+   - companion backend と local OpenClaw の切り替え
 
-現在は次の 2 つの使い方を想定しています。
+2. **OpenClaw Runtime インストーラ**
+   - HumanClaw 用の OpenClaw runtime をまとめた Windows インストーラ / portable パッケージ
+   - コードは [`openclaw-installer/`](./openclaw-installer)
+   - 上流 OpenClaw の完全なソースツリーは同梱していません
 
-- コンパニオンモード: ローカルで動く 3D VRM デスクトップペット
-- アシスタントモード: 同じフロントエンドを OpenClaw に接続し、セッションやツール実行は OpenClaw 側に任せる構成
+## 役割分担
 
-## OpenClaw との役割分担
+- **HumanClaw**: アバター描画、トレイ、チャット UI、音声まわり、デスクトップ体験
+- **OpenClaw**: Gateway、session、Agent runtime、tool 実行、タスク制御
 
-- HumanClaw は OpenClaw の Gateway や Agent runtime の代替ではありません。
-- HumanClaw はアバター描画、デスクトップ操作、トレイ表示、UI 表現を担当します。
-- OpenClaw はセッション、イベントストリーム、ツール実行、タスク制御を担当します。
+## 実行モード
 
-## ローカル実行
+- **`companion-service`**
+  - companion backend を利用
+  - 軽い会話と companion 体験向け
+
+- **`openclaw-local`**
+  - ローカル OpenClaw Gateway に接続
+  - session / tools / background work は OpenClaw 側が担当
+
+## クイックスタート
 
 ```bash
 pnpm install
-pnpm desktop:start
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+pnpm desktop:dev
 ```
 
-OpenClaw と接続する場合:
+ローカル OpenClaw と接続する場合:
 
 ```bash
 openclaw gateway --profile source-dev
@@ -42,4 +59,26 @@ set AIGRIL_OPENCLAW_GATEWAY_URL=ws://127.0.0.1:19011
 pnpm exec electron .
 ```
 
-互換性のため、既存の `AIGRIL_*` 環境変数と `aigril:*` IPC チャネル名は当面そのまま維持しています。
+Windows パッケージ:
+
+```bash
+pnpm desktop:package
+pnpm openclaw:prepare-runtime
+pnpm openclaw:package-installer
+```
+
+## リポジトリ構成
+
+```text
+backend/             FastAPI companion backend
+electron/            Electron main / preload / OpenClaw bridge
+openclaw-installer/  OpenClaw Runtime installer shell
+src/                 avatar runtime / chat runtime / control UI
+Resources/           VRM model and motion assets
+scripts/             packaging helpers
+```
+
+## 補足
+
+互換性のため、既存の `AIGRIL_*` 環境変数と `aigril:*` IPC 名は当面維持しています。  
+OpenClaw 関連の詳細は [`openclaw-installer/README.md`](./openclaw-installer/README.md) を参照してください。

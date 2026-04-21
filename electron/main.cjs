@@ -1,12 +1,21 @@
 const path = require('path');
-const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, screen, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, screen, session, shell } = require('electron');
+const { getBundledInstallEdition } = require('./app-edition.cjs');
+const {
+    applyRuntimeEnvironment,
+    ensureHumanClawFsLayout,
+    resolveHumanClawFsLayout
+} = require('./fs-layout.cjs');
 const { OpenClawGatewayManager } = require('./openclaw-gateway.cjs');
+const { DesktopASRManager } = require('./local-asr-manager.cjs');
 const {
     DEFAULT_PET_SCALE,
     PET_SCALE_OPTIONS,
     getScaledPetSize,
     loadDesktopState,
+    normalizePreferredMicDeviceId,
     normalizePetScale,
+    normalizeRecognitionMode,
     resizePetBounds,
     saveDesktopState
 } = require('./store.cjs');
@@ -16,14 +25,58 @@ const devServerUrl = process.env.AIGRIL_DESKTOP_DEV_URL || '';
 const PET_MIN_SIZE = getScaledPetSize(PET_SCALE_OPTIONS[0]);
 const CHAT_MIN_WIDTH = 360;
 const CHAT_MIN_HEIGHT = 420;
+const CONTROL_MIN_WIDTH = 860;
+const CONTROL_MIN_HEIGHT = 620;
+const SETUP_MIN_WIDTH = 880;
+const SETUP_MIN_HEIGHT = 640;
+const bundledInstallEdition = getBundledInstallEdition(app);
+const runtimeLayout = resolveHumanClawFsLayout({
+    installEdition: bundledInstallEdition
+});
+
+ensureHumanClawFsLayout(runtimeLayout);
+applyRuntimeEnvironment(runtimeLayout);
+app.setPath('appData', runtimeLayout.runtimeRoot);
+app.setPath('userData', runtimeLayout.userDataDir);
+app.setPath('sessionData', runtimeLayout.sessionDataDir);
+app.setPath('logs', runtimeLayout.logsDir);
+app.setPath('temp', runtimeLayout.tempDir);
+app.setPath('crashDumps', runtimeLayout.crashDumpsDir);
+if (typeof app.setAppLogsPath === 'function') {
+    app.setAppLogsPath(runtimeLayout.logsDir);
+}
+app.commandLine.appendSwitch('disk-cache-dir', runtimeLayout.cacheDir);
 
 let petWindow = null;
 let chatWindow = null;
+let controlWindow = null;
+let setupWindow = null;
 let tray = null;
 let isQuitting = false;
 let desktopState = null;
 let assistantGateway = null;
+let desktopASRManager = null;
+let assistantHealthState = null;
 const windowPersistTimers = new Map();
+
+function configureMediaPermissions() {
+    const defaultSession = session.defaultSession;
+    if (!defaultSession) {
+        return;
+    }
+
+    defaultSession.setPermissionCheckHandler((_webContents, permission) => (
+        permission === 'media' || permission === 'audioCapture'
+    ));
+
+    defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+        if (permission === 'media' || permission === 'audioCapture') {
+            callback(true);
+            return;
+        }
+        callback(false);
+    });
+}
 
 function isDevMode() {
     return Boolean(devServerUrl);
@@ -34,6 +87,216 @@ function buildRendererUrl(pageName) {
         return `${devServerUrl || DEFAULT_DEV_SERVER_URL}/${pageName}`;
     }
     return path.join(__dirname, '..', 'dist', pageName);
+}
+
+function normalizeOptionalString(value, fallback = '') {
+    if (typeof value !== 'string') {
+        return fallback;
+    }
+    const trimmed = value.trim();
+    return trimmed || fallback;
+}
+
+function getCurrentPreferences() {
+    return desktopState?.preferences || {};
+}
+
+function normalizeBackendMode(value, fallback = 'companion-service') {
+    const normalized = normalizeOptionalString(value, '').toLowerCase();
+    if (normalized === 'companion-service' || normalized === 'openclaw-local') {
+        return normalized;
+    }
+    if (normalized === 'openclaw' || normalized === 'aigril') {
+        return 'openclaw-local';
+    }
+    if (normalized === 'companion') {
+        return 'companion-service';
+    }
+    if (normalized === 'assistant' || normalized === 'operator') {
+        return 'openclaw-local';
+    }
+    return fallback;
+}
+
+function shouldUseOpenClaw(settings = buildRuntimeSettingsCore()) {
+    return normalizeBackendMode(settings.backendMode) === 'openclaw-local';
+}
+
+function buildRuntimeSettingsCore() {
+    const preferences = getCurrentPreferences();
+    return {
+        backendMode: normalizeBackendMode(preferences.backendMode || preferences.installEdition),
+        onboardingCompleted: Boolean(preferences.onboardingCompleted),
+        autoLaunchOnLogin: Boolean(preferences.autoLaunchOnLogin),
+        petScale: Number(preferences.petScale) || DEFAULT_PET_SCALE,
+        petSkipTaskbar: Boolean(preferences.petSkipTaskbar),
+        cameraDistance: Number(preferences.cameraDistance) || 1.1,
+        cameraTargetY: Number(preferences.cameraTargetY) || 1.0,
+        backendBaseUrl: normalizeOptionalString(preferences.backendBaseUrl, 'https://airi-backend.onrender.com'),
+        openclawGatewayUrl: normalizeOptionalString(preferences.openclawGatewayUrl, 'ws://127.0.0.1:19011'),
+        voiceInputEnabled: preferences.voiceInputEnabled !== false,
+        voiceOutputEnabled: preferences.voiceOutputEnabled !== false,
+        recognitionMode: normalizeRecognitionMode(preferences.recognitionMode),
+        preferredMicDeviceId: normalizePreferredMicDeviceId(preferences.preferredMicDeviceId)
+    };
+}
+
+function buildAssistantHealthSnapshot(settings = buildRuntimeSettingsCore(), overrides = {}) {
+    const backendMode = normalizeBackendMode(settings.backendMode);
+    const gatewayStatus = overrides.gatewayStatus || assistantGateway?.getStatus?.() || {
+        enabled: backendMode === 'openclaw-local',
+        connected: false,
+        connecting: false,
+        gatewayUrl: settings.openclawGatewayUrl,
+        lastError: ''
+    };
+    const probeError = normalizeOptionalString(overrides.probeError);
+
+    if (backendMode === 'companion-service') {
+        return {
+            status: 'service',
+            ready: false,
+            effectiveMode: 'backend',
+            reason: `当前对话走陪伴后端：${settings.backendBaseUrl}`,
+            hint: '如果你已经自行安装并启动 OpenClaw，可切到“本地 OpenClaw”后再做健康检查。',
+            gatewayUrl: gatewayStatus.gatewayUrl || settings.openclawGatewayUrl,
+            checkedAt: Date.now()
+        };
+    }
+
+    if (gatewayStatus.connected) {
+        return {
+            status: 'ready',
+            ready: true,
+            effectiveMode: 'assistant',
+            reason: `已连接用户本地 OpenClaw Gateway：${gatewayStatus.gatewayUrl || settings.openclawGatewayUrl}`,
+            hint: '当前桌宠会把对话转发给 OpenClaw，由它自己维护 session、工具和任务运行。',
+            gatewayUrl: gatewayStatus.gatewayUrl || settings.openclawGatewayUrl,
+            checkedAt: Date.now()
+        };
+    }
+
+    if (gatewayStatus.connecting) {
+        return {
+            status: 'checking',
+            ready: false,
+            effectiveMode: 'backend',
+            reason: `${gatewayStatus.gatewayUrl || settings.openclawGatewayUrl} 正在连接中。`,
+            hint: '如果长时间停在这里，通常是本机 OpenClaw 还没启动，或者 Gateway 地址写错了。',
+            gatewayUrl: gatewayStatus.gatewayUrl || settings.openclawGatewayUrl,
+            checkedAt: Date.now()
+        };
+    }
+
+    return {
+        status: 'degraded',
+        ready: false,
+        effectiveMode: 'backend',
+        reason:
+            probeError ||
+            normalizeOptionalString(gatewayStatus.lastError) ||
+            `未检测到可用的用户本地 OpenClaw Gateway：${gatewayStatus.gatewayUrl || settings.openclawGatewayUrl}`,
+        hint: '请先在本机自行安装并启动 OpenClaw，并在 OpenClaw 侧完成 provider、模型和权限配置。HumanClaw 只负责连接，不负责部署和修复。',
+        gatewayUrl: gatewayStatus.gatewayUrl || settings.openclawGatewayUrl,
+        checkedAt: Date.now()
+    };
+}
+
+function buildRuntimeSettingsPayload() {
+    const settings = buildRuntimeSettingsCore();
+    return {
+        ...settings,
+        assistantHealth: assistantHealthState || buildAssistantHealthSnapshot(settings)
+    };
+}
+
+async function refreshAssistantHealth(options = {}) {
+    const { probe = false } = options;
+    const settings = buildRuntimeSettingsCore();
+    let probeError = '';
+    let gatewayStatus = assistantGateway?.getStatus?.() || {
+        enabled: shouldUseOpenClaw(settings),
+        connected: false,
+        connecting: false,
+        gatewayUrl: settings.openclawGatewayUrl,
+        lastError: ''
+    };
+
+    if (probe && shouldUseOpenClaw(settings)) {
+        try {
+            const gateway = ensureAssistantGateway();
+            await gateway.ensureConnected();
+            gatewayStatus = gateway.getStatus();
+        } catch (error) {
+            if (!probeError) {
+                probeError = error instanceof Error ? error.message : String(error);
+            }
+            gatewayStatus = assistantGateway?.getStatus?.() || gatewayStatus;
+        }
+    }
+
+    assistantHealthState = buildAssistantHealthSnapshot(settings, {
+        gatewayStatus,
+        probeError
+    });
+    syncRuntimeEnvironment();
+    broadcastSettingsUpdate();
+    return assistantHealthState;
+}
+
+function syncRuntimeEnvironment() {
+    const settings = buildRuntimeSettingsPayload();
+    process.env.HUMANCLAW_BACKEND_MODE = settings.backendMode;
+    process.env.AIGRIL_BACKEND_MODE = settings.backendMode;
+    process.env.HUMANCLAW_BACKEND_BASE_URL = settings.backendBaseUrl;
+    process.env.AIGRIL_BACKEND_BASE_URL = settings.backendBaseUrl;
+    process.env.HUMANCLAW_OPENCLAW_GATEWAY_URL = settings.openclawGatewayUrl;
+    process.env.AIGRIL_OPENCLAW_GATEWAY_URL = settings.openclawGatewayUrl;
+    process.env.HUMANCLAW_VOICE_INPUT_ENABLED = String(settings.voiceInputEnabled);
+    process.env.HUMANCLAW_VOICE_OUTPUT_ENABLED = String(settings.voiceOutputEnabled);
+    process.env.HUMANCLAW_RECOGNITION_MODE = settings.recognitionMode;
+    process.env.HUMANCLAW_PREFERRED_MIC_DEVICE_ID = settings.preferredMicDeviceId;
+    process.env.HUMANCLAW_CAMERA_DISTANCE = String(settings.cameraDistance);
+    process.env.HUMANCLAW_CAMERA_TARGET_Y = String(settings.cameraTargetY);
+    process.env.HUMANCLAW_ASSISTANT_READY = String(Boolean(settings.assistantHealth?.ready));
+    process.env.HUMANCLAW_ASSISTANT_EFFECTIVE_MODE = normalizeOptionalString(
+        settings.assistantHealth?.effectiveMode,
+        'backend'
+    );
+    process.env.HUMANCLAW_ASSISTANT_REASON = normalizeOptionalString(settings.assistantHealth?.reason);
+}
+
+function applyLoginPreference() {
+    const settings = buildRuntimeSettingsPayload();
+    app.setLoginItemSettings({
+        openAtLogin: Boolean(settings.autoLaunchOnLogin),
+        path: process.execPath
+    });
+}
+
+function getOpenWindows() {
+    return [petWindow, chatWindow, controlWindow, setupWindow].filter(
+        (window) => window && !window.isDestroyed()
+    );
+}
+
+function broadcastSettingsUpdate() {
+    const payload = buildRuntimeSettingsPayload();
+    for (const window of getOpenWindows()) {
+        window.webContents.send('aigril:settings-updated', payload);
+    }
+}
+
+async function handleAsrTranscribeRequest(payload = {}) {
+    if (!buildRuntimeSettingsPayload().voiceInputEnabled) {
+        throw new Error('当前版本已关闭本地语音识别');
+    }
+    if (!desktopASRManager) {
+        throw new Error('桌宠本地语音识别尚未初始化');
+    }
+
+    const audioBytes = payload?.audioBytes ? payload.audioBytes : payload;
+    return desktopASRManager.transcribeAudioBytes(audioBytes);
 }
 
 function makeTrayIcon() {
@@ -67,6 +330,116 @@ function clampBoundsToDisplay(bounds, minimumWidth = 320, minimumHeight = 320) {
 function persistDesktopState() {
     desktopState = saveDesktopState(app, desktopState);
     refreshTrayMenu();
+}
+
+function resizePetWindowForScale(scale) {
+    const normalizedScale = normalizePetScale(scale);
+    const referenceBounds = petWindow ? petWindow.getBounds() : desktopState.petWindow.bounds;
+    const nextBounds = clampBoundsToDisplay(
+        resizePetBounds(referenceBounds, normalizedScale),
+        PET_MIN_SIZE.width,
+        PET_MIN_SIZE.height
+    );
+
+    desktopState.preferences.petScale = normalizedScale;
+    desktopState.petWindow.bounds = nextBounds;
+
+    if (petWindow) {
+        petWindow.setBounds(nextBounds);
+    }
+}
+
+function applyWindowLevelPreferences() {
+    if (petWindow) {
+        petWindow.setSkipTaskbar(Boolean(desktopState.preferences.petSkipTaskbar));
+    }
+}
+
+async function reconnectAssistantGateway() {
+    if (assistantGateway) {
+        await assistantGateway.shutdown().catch(() => {});
+        assistantGateway = null;
+    }
+
+    const gateway = ensureAssistantGateway();
+    broadcastAssistantEvent({
+        type: 'status',
+        payload: gateway.getStatus()
+    });
+
+    if (gateway.getStatus().enabled) {
+        await gateway.ensureConnected().catch(() => {});
+    }
+
+    await refreshAssistantHealth({ probe: false }).catch(() => {});
+}
+
+function resetAssistantGateway() {
+    void reconnectAssistantGateway();
+}
+
+function updateDesktopPreferences(patch = {}, options = {}) {
+    if (!desktopState) {
+        return buildRuntimeSettingsPayload();
+    }
+
+    const currentPreferences = getCurrentPreferences();
+    const patchWithoutProvider = {
+        ...(patch || {})
+    };
+    delete patchWithoutProvider.assistantProvider;
+    delete patchWithoutProvider.featureGrants;
+
+    const nextBackendMode = normalizeBackendMode(
+        patchWithoutProvider.backendMode || patchWithoutProvider.installEdition || currentPreferences.backendMode
+    );
+    delete patchWithoutProvider.installEdition;
+
+    const nextPreferences = {
+        ...currentPreferences,
+        ...patchWithoutProvider,
+        backendMode: nextBackendMode,
+        installEdition: nextBackendMode === 'companion-service' ? 'companion' : 'assistant'
+    };
+
+    nextPreferences.recognitionMode = normalizeRecognitionMode(nextPreferences.recognitionMode);
+    nextPreferences.preferredMicDeviceId = normalizePreferredMicDeviceId(
+        nextPreferences.preferredMicDeviceId
+    );
+
+    desktopState.preferences = nextPreferences;
+
+    if (Object.prototype.hasOwnProperty.call(patchWithoutProvider, 'petScale')) {
+        resizePetWindowForScale(nextPreferences.petScale);
+    }
+
+    applyWindowLevelPreferences();
+    assistantHealthState = buildAssistantHealthSnapshot(buildRuntimeSettingsCore());
+    syncRuntimeEnvironment();
+    applyLoginPreference();
+    persistDesktopState();
+    broadcastSettingsUpdate();
+
+    const shouldRefreshAssistantHealth =
+        options.resetAssistantGateway ||
+        Object.prototype.hasOwnProperty.call(patchWithoutProvider, 'backendMode') ||
+        Object.prototype.hasOwnProperty.call(patch, 'installEdition') ||
+        Object.prototype.hasOwnProperty.call(patchWithoutProvider, 'openclawGatewayUrl');
+
+    if (
+        options.resetAssistantGateway ||
+        Object.prototype.hasOwnProperty.call(patchWithoutProvider, 'backendMode') ||
+        Object.prototype.hasOwnProperty.call(patch, 'installEdition') ||
+        Object.prototype.hasOwnProperty.call(patchWithoutProvider, 'openclawGatewayUrl')
+    ) {
+        resetAssistantGateway();
+    }
+
+    if (shouldRefreshAssistantHealth) {
+        void refreshAssistantHealth({ probe: true }).catch(() => {});
+    }
+
+    return buildRuntimeSettingsPayload();
 }
 
 function updateWindowState(key, window, options = {}) {
@@ -136,7 +509,9 @@ function broadcastAssistantEvent(payload) {
     if (!payload) {
         return;
     }
-    petWindow?.webContents.send('aigril:assistant-event', payload);
+    for (const window of getOpenWindows()) {
+        window.webContents.send('aigril:assistant-event', payload);
+    }
 }
 
 function ensureAssistantGateway() {
@@ -144,8 +519,11 @@ function ensureAssistantGateway() {
         return assistantGateway;
     }
 
+    const settings = buildRuntimeSettingsPayload();
     assistantGateway = new OpenClawGatewayManager({
-        clientVersion: app.getVersion()
+        clientVersion: app.getVersion(),
+        enabled: settings.backendMode === 'openclaw-local',
+        gatewayUrl: settings.openclawGatewayUrl
     });
 
     assistantGateway.on('status', (status) => {
@@ -180,6 +558,42 @@ function hideChatWindow() {
     }
 }
 
+function showControlWindow() {
+    if (!controlWindow) {
+        createControlWindow();
+    }
+
+    if (!controlWindow.isVisible()) {
+        controlWindow.show();
+    }
+
+    controlWindow.focus();
+}
+
+function hideControlWindow() {
+    if (controlWindow?.isVisible()) {
+        controlWindow.hide();
+    }
+}
+
+function showSetupWindow() {
+    if (!setupWindow) {
+        createSetupWindow();
+    }
+
+    if (!setupWindow.isVisible()) {
+        setupWindow.show();
+    }
+
+    setupWindow.focus();
+}
+
+function hideSetupWindow() {
+    if (setupWindow?.isVisible()) {
+        setupWindow.hide();
+    }
+}
+
 function toggleChatWindow() {
     if (!chatWindow || !chatWindow.isVisible()) {
         showChatWindow();
@@ -199,25 +613,11 @@ function applyPetScale(scale) {
     if (!desktopState) {
         return;
     }
-
-    const normalizedScale = normalizePetScale(scale);
-    const referenceBounds = petWindow ? petWindow.getBounds() : desktopState.petWindow.bounds;
-    const nextBounds = clampBoundsToDisplay(
-        resizePetBounds(referenceBounds, normalizedScale),
-        PET_MIN_SIZE.width,
-        PET_MIN_SIZE.height
-    );
-
-    desktopState.preferences.petScale = normalizedScale;
-    desktopState.petWindow.bounds = nextBounds;
-
+    updateDesktopPreferences({ petScale: scale });
     if (petWindow) {
-        petWindow.setBounds(nextBounds);
         petWindow.show();
         petWindow.focus();
     }
-
-    persistDesktopState();
 }
 
 function buildPetScaleMenu() {
@@ -232,14 +632,32 @@ function buildPetScaleMenu() {
 }
 
 function buildPetContextMenu() {
+    const settings = buildRuntimeSettingsPayload();
+    const backendLabelMap = {
+        'companion-service': '陪伴后端',
+        'openclaw-local': '本地 OpenClaw'
+    };
+
     return Menu.buildFromTemplate([
         {
             label: '聊天',
             click: () => showChatWindow()
         },
         {
+            label: '控制面板',
+            click: () => showControlWindow()
+        },
+        {
+            label: '首启向导',
+            click: () => showSetupWindow()
+        },
+        {
             label: '缩放',
             submenu: buildPetScaleMenu()
+        },
+        {
+            label: `当前后端：${backendLabelMap[settings.backendMode] || '陪伴后端'}`,
+            enabled: false
         },
         { type: 'separator' },
         {
@@ -356,6 +774,97 @@ function createChatWindow() {
     });
 }
 
+function createControlWindow() {
+    const controlState = desktopState.controlWindow;
+    const controlBounds = clampBoundsToDisplay(controlState.bounds, CONTROL_MIN_WIDTH, CONTROL_MIN_HEIGHT);
+
+    controlWindow = new BrowserWindow({
+        ...controlBounds,
+        frame: false,
+        transparent: false,
+        backgroundColor: '#0c1722',
+        hasShadow: true,
+        resizable: true,
+        show: false,
+        skipTaskbar: false,
+        title: 'HumanClaw Control',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.cjs'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false
+        }
+    });
+
+    openExternalLinks(controlWindow);
+    hookWindowPersistence('controlWindow', controlWindow);
+
+    controlWindow.on('close', (event) => {
+        if (isQuitting) {
+            return;
+        }
+        event.preventDefault();
+        controlWindow.hide();
+    });
+
+    controlWindow.on('closed', () => {
+        controlWindow = null;
+    });
+
+    void loadWindowContent(controlWindow, 'control.html').then(() => {
+        if (desktopState.controlWindow.visible) {
+            controlWindow.show();
+        }
+        controlWindow.webContents.send('aigril:settings-updated', buildRuntimeSettingsPayload());
+    });
+}
+
+function createSetupWindow() {
+    const setupState = desktopState.setupWindow;
+    const setupBounds = clampBoundsToDisplay(setupState.bounds, SETUP_MIN_WIDTH, SETUP_MIN_HEIGHT);
+
+    setupWindow = new BrowserWindow({
+        ...setupBounds,
+        frame: false,
+        transparent: false,
+        backgroundColor: '#0d1b2b',
+        hasShadow: true,
+        resizable: true,
+        show: false,
+        skipTaskbar: false,
+        alwaysOnTop: true,
+        title: 'HumanClaw Setup',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.cjs'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false
+        }
+    });
+
+    openExternalLinks(setupWindow);
+    hookWindowPersistence('setupWindow', setupWindow);
+
+    setupWindow.on('close', (event) => {
+        if (isQuitting) {
+            return;
+        }
+        event.preventDefault();
+        setupWindow.hide();
+    });
+
+    setupWindow.on('closed', () => {
+        setupWindow = null;
+    });
+
+    void loadWindowContent(setupWindow, 'setup.html').then(() => {
+        if (desktopState.setupWindow.visible || !desktopState.preferences.onboardingCompleted) {
+            setupWindow.show();
+        }
+        setupWindow.webContents.send('aigril:settings-updated', buildRuntimeSettingsPayload());
+    });
+}
+
 function refreshTrayMenu() {
     if (!tray) {
         return;
@@ -381,6 +890,14 @@ function refreshTrayMenu() {
         {
             label: '聊天',
             click: () => showChatWindow()
+        },
+        {
+            label: '控制面板',
+            click: () => showControlWindow()
+        },
+        {
+            label: '首启向导',
+            click: () => showSetupWindow()
         },
         {
             label: '缩放',
@@ -424,8 +941,6 @@ function createTray() {
 }
 
 function registerIpc() {
-    const gateway = ensureAssistantGateway();
-
     ipcMain.handle('aigril:toggle-chat-window', () => toggleChatWindow());
     ipcMain.handle('aigril:show-chat-window', () => {
         showChatWindow();
@@ -436,29 +951,77 @@ function registerIpc() {
         return false;
     });
     ipcMain.handle('aigril:show-pet-context-menu', () => showPetContextMenu());
+    ipcMain.handle('aigril:show-control-window', () => {
+        showControlWindow();
+        return true;
+    });
+    ipcMain.handle('aigril:show-setup-window', () => {
+        showSetupWindow();
+        return true;
+    });
+    ipcMain.handle('aigril:get-runtime-settings', () => buildRuntimeSettingsPayload());
+    ipcMain.handle('aigril:save-runtime-settings', (_event, payload = {}) => {
+        return updateDesktopPreferences(payload || {});
+    });
+    ipcMain.handle('aigril:set-recognition-mode', (_event, mode) => {
+        return updateDesktopPreferences({
+            recognitionMode: mode
+        });
+    });
+    ipcMain.handle('aigril:set-preferred-mic-device', (_event, deviceId) => {
+        return updateDesktopPreferences({
+            preferredMicDeviceId: deviceId
+        });
+    });
+    ipcMain.handle('aigril:complete-onboarding', (_event, payload = {}) => {
+        const nextSettings = updateDesktopPreferences({
+            ...payload,
+            onboardingCompleted: true
+        });
+        return refreshAssistantHealth({ probe: true })
+            .then(() => buildRuntimeSettingsPayload())
+            .catch(() => nextSettings);
+    });
+    ipcMain.handle('aigril:run-runtime-health-check', async () => {
+        await refreshAssistantHealth({ probe: true });
+        return buildRuntimeSettingsPayload();
+    });
+    ipcMain.handle('aigril:close-current-window', (event) => {
+        const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+        if (ownerWindow && !ownerWindow.isDestroyed()) {
+            ownerWindow.hide();
+        }
+        return true;
+    });
     ipcMain.handle('aigril:assistant-status', async () => {
-        return gateway.getStatus();
+        const status = ensureAssistantGateway().getStatus();
+        status.health = assistantHealthState || buildAssistantHealthSnapshot(buildRuntimeSettingsCore(), {
+            gatewayStatus: status
+        });
+        return status;
     });
     ipcMain.handle('aigril:assistant-history', async (_event, payload = {}) => {
-        return gateway.getHistory(Number(payload.limit) || 200);
+        return ensureAssistantGateway().getHistory(Number(payload.limit) || 200);
     });
     ipcMain.handle('aigril:assistant-send-message', async (_event, payload = {}) => {
-        return gateway.sendMessage(payload.content || '', {
+        return ensureAssistantGateway().sendMessage(payload.content || '', {
             timeoutMs: Number(payload.timeoutMs) || undefined
         });
     });
     ipcMain.handle('aigril:assistant-abort-run', async (_event, payload = {}) => {
-        return gateway.abortRun(payload.runId || '');
+        return ensureAssistantGateway().abortRun(payload.runId || '');
     });
     ipcMain.handle('aigril:assistant-list-sessions', async (_event, payload = {}) => {
-        return gateway.listSessions(Number(payload.limit) || 20);
+        return ensureAssistantGateway().listSessions(Number(payload.limit) || 20);
     });
     ipcMain.handle('aigril:assistant-set-session-key', async (_event, payload = {}) => {
-        return gateway.setSessionKey(payload.sessionKey || '');
+        return ensureAssistantGateway().setSessionKey(payload.sessionKey || '');
     });
     ipcMain.handle('aigril:assistant-patch-session', async (_event, payload = {}) => {
-        return gateway.patchSession(payload || {});
+        return ensureAssistantGateway().patchSession(payload || {});
     });
+    ipcMain.handle('aigril:asr-transcribe', async (_event, payload = {}) => handleAsrTranscribeRequest(payload));
+    ipcMain.handle('aigril:transcribe-audio', async (_event, payload = {}) => handleAsrTranscribeRequest(payload));
 
     ipcMain.on('aigril:drag-pet-window', (_event, payload = {}) => {
         if (!petWindow) {
@@ -503,24 +1066,42 @@ if (!app.requestSingleInstanceLock()) {
     });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+    configureMediaPermissions();
     desktopState = loadDesktopState(app);
     desktopState = saveDesktopState(app, desktopState);
+    syncRuntimeEnvironment();
+    applyLoginPreference();
     ensureAssistantGateway();
+    desktopASRManager = new DesktopASRManager({ app });
     Menu.setApplicationMenu(null);
     registerIpc();
     createPetWindow();
     createChatWindow();
     createTray();
+    if (!desktopState.preferences.onboardingCompleted) {
+        createSetupWindow();
+    }
 
-    void assistantGateway?.ensureConnected().catch(() => {
-        // Keep the desktop available even when the local gateway is offline.
-    });
+    if (assistantGateway?.getStatus().enabled) {
+        await assistantGateway.ensureConnected().catch(() => {
+            // Keep the desktop available even when the local gateway is offline.
+        });
+    }
+    await refreshAssistantHealth({ probe: true }).catch(() => {});
+    setTimeout(() => {
+        desktopASRManager?.warmup?.().catch((error) => {
+            console.warn('[ASR] 后台预热失败：', error.message || error);
+        });
+    }, 4000);
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
             createPetWindow();
             createChatWindow();
+            if (!desktopState.preferences.onboardingCompleted) {
+                createSetupWindow();
+            }
             if (!tray) {
                 createTray();
             }
@@ -533,6 +1114,7 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
     isQuitting = true;
     void assistantGateway?.shutdown();
+    desktopASRManager?.close?.();
 });
 
 app.on('window-all-closed', () => {

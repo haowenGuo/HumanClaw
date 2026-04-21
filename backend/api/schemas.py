@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -46,6 +46,25 @@ class ChatTextResponse(BaseModel):
     speech_text: str = Field(..., description="原本用于 TTS 的净化文本")
     action: Optional[str] = Field(default=None, description="动作标签，例如 wave / dance")
     expression: Optional[str] = Field(default=None, description="表情标签，例如 happy")
+
+
+class SpeechSynthesisRequest(BaseModel):
+    text: str = Field(..., description="待播报原文")
+    mode: Literal["summary", "plain"] = Field(default="summary", description="summary=先摘要再播报，plain=直接播报")
+    max_chars: int = Field(default=120, ge=40, le=400, description="summary 模式下摘要长度上限")
+    language: str = Field(default="zh-CN", description="语音语言代码")
+
+
+class SpeechSynthesisResponse(BaseModel):
+    source_text: str = Field(..., description="原始输入文本")
+    summary_text: str = Field(..., description="最终用于播报的文本")
+    mode: Literal["summary", "plain"] = Field(..., description="播报模式")
+    audio_base64: str = Field(..., description="Base64 编码音频数据")
+    audio_format: str = Field(..., description="音频格式，例如 mp3_44100_128")
+    mime_type: str = Field(..., description="音频 MIME 类型")
+    alignment: Optional[TTSAlignment] = Field(default=None, description="原始文本字符级时间戳")
+    normalized_alignment: Optional[TTSAlignment] = Field(default=None, description="规范化文本字符级时间戳")
+    duration_hint_seconds: Optional[float] = Field(default=None, description="根据时间戳估算的音频时长")
 
 
 class SafetyJudgeResultModel(BaseModel):

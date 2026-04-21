@@ -1,5 +1,6 @@
 import { CONFIG } from './config.js';
 import { OpenClawDesktopChatService } from './openclaw-chat-service.js';
+import { getRuntimeSettingsSnapshot, subscribeRuntimeSettings } from './runtime-settings.js';
 
 
 function sleep(ms) {
@@ -219,6 +220,154 @@ function buildDemoReply(latestUserMessage, isAutoChat) {
     ]);
 }
 
+function normalizeErrorMessage(error) {
+    if (!error) {
+        return '';
+    }
+    if (error instanceof Error) {
+        return (error.message || '').trim();
+    }
+    return String(error).trim();
+}
+
+function isOpenClawAvailabilityError(error) {
+    const message = normalizeErrorMessage(error).toLowerCase();
+    if (!message) {
+        return false;
+    }
+
+    return [
+        'openclaw gateway',
+        'gateway runtime',
+        'gateway 连接',
+        '未找到 openclaw',
+        '桥接',
+        '尚未连接',
+        '助手连接',
+        'session closed',
+        'socket closed'
+    ].some((token) => message.includes(token));
+}
+
+class DesktopAutoChatService {
+    constructor() {
+        this.assistantService = window.aigrilDesktop?.assistant?.isSupported
+            ? new OpenClawDesktopChatService()
+            : null;
+        this.backendService = new BackendChatService();
+        this.activeService = null;
+        this.resolvePromise = null;
+        this.bootstrapSnapshot = null;
+        this.fallbackReason = null;
+        this.runtimeSettings = getRuntimeSettingsSnapshot();
+        this.mode = this.assistantService ? 'detecting' : 'backend';
+        this.supportsAutoChat = true;
+        this.prefersThinkingState = false;
+        this.unsubscribe = subscribeRuntimeSettings((nextSettings) => {
+            const previousMode = this.runtimeSettings?.backendMode;
+            this.runtimeSettings = nextSettings;
+            if (nextSettings?.backendMode !== previousMode) {
+                this.activeService = null;
+                this.resolvePromise = null;
+                this.bootstrapSnapshot = null;
+                this.fallbackReason = null;
+                this.mode =
+                    nextSettings?.backendMode === 'openclaw-local' && this.assistantService
+                        ? 'detecting'
+                        : 'backend';
+                this.syncCapabilities();
+            }
+        });
+    }
+
+    syncCapabilities() {
+        this.supportsAutoChat = this.activeService?.supportsAutoChat;
+        this.prefersThinkingState = this.activeService?.prefersThinkingState;
+    }
+
+    async resolveActiveService() {
+        if (this.activeService) {
+            return this.activeService;
+        }
+
+        if (this.resolvePromise) {
+            return await this.resolvePromise;
+        }
+
+        this.resolvePromise = (async () => {
+            const requestedMode = this.runtimeSettings?.backendMode || 'companion-service';
+
+            if (requestedMode === 'openclaw-local' && this.assistantService) {
+                try {
+                    this.bootstrapSnapshot = await this.assistantService.bootstrapTranscript();
+                    this.activeService = this.assistantService;
+                    this.mode = 'assistant';
+                    this.fallbackReason = null;
+                    this.syncCapabilities();
+                    return this.activeService;
+                } catch (error) {
+                    this.fallbackReason = error instanceof Error ? error : new Error(String(error));
+                    console.info('OpenClaw unavailable, fallback to backend mode:', this.fallbackReason);
+                }
+            }
+
+            this.activeService = this.backendService;
+            this.mode = 'backend';
+            this.syncCapabilities();
+            return this.activeService;
+        })();
+
+        try {
+            return await this.resolvePromise;
+        } finally {
+            this.resolvePromise = null;
+        }
+    }
+
+    getWelcomeMessage() {
+        if (this.mode === 'assistant') {
+            return this.assistantService?.getWelcomeMessage?.() ||
+                '已连接 OpenClaw 助手。';
+        }
+
+        if (this.runtimeSettings?.backendMode === 'companion-service') {
+            return `当前使用陪伴后端 ${CONFIG.BACKEND_BASE_URL}。如果你已经自行安装 OpenClaw，可在控制面板切到“本地 OpenClaw”。`;
+        }
+
+        return `未检测到可用的本地 OpenClaw，已切换到纯桌宠模式，将通过后端 ${CONFIG.BACKEND_BASE_URL} 回复。`;
+    }
+
+    async bootstrapTranscript() {
+        const service = await this.resolveActiveService();
+        if (service === this.assistantService) {
+            return this.bootstrapSnapshot || await service.bootstrapTranscript();
+        }
+
+        const bootstrap = await service.bootstrapTranscript?.();
+        return {
+            ...(bootstrap || {}),
+            statusText: this.getWelcomeMessage()
+        };
+    }
+
+    async fetchAssistantTurn(options) {
+        const service = await this.resolveActiveService();
+
+        try {
+            return await service.fetchAssistantTurn(options);
+        } catch (error) {
+            if (service === this.assistantService && isOpenClawAvailabilityError(error)) {
+                this.fallbackReason = error instanceof Error ? error : new Error(String(error));
+                this.activeService = this.backendService;
+                this.mode = 'backend';
+                this.syncCapabilities();
+                return await this.backendService.fetchAssistantTurn(options);
+            }
+            throw error;
+        }
+    }
+}
+
 
 export class BackendChatService {
     getWelcomeMessage() {
@@ -273,7 +422,7 @@ export class DemoChatService {
 
 export function createChatService() {
     if (window.aigrilDesktop?.assistant?.isSupported) {
-        return new OpenClawDesktopChatService();
+        return new DesktopAutoChatService();
     }
 
     return CONFIG.DEMO_MODE_ENABLED

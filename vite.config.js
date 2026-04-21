@@ -15,7 +15,9 @@ export default defineConfig({
             input: {
                 index: resolve(workspaceRoot, 'index.html'),
                 pet: resolve(workspaceRoot, 'pet.html'),
-                chat: resolve(workspaceRoot, 'chat.html')
+                chat: resolve(workspaceRoot, 'chat.html'),
+                control: resolve(workspaceRoot, 'control.html'),
+                setup: resolve(workspaceRoot, 'setup.html')
             }
         }
     }
